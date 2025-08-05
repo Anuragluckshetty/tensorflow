@@ -70,6 +70,8 @@ TF_CONST_INIT extern const absl::string_view kSyscallsPlaneName;
 TF_CONST_INIT extern const absl::string_view kScopeRangeIdTreePlaneName;
 // Name prefix of XPlane that contains GPU on-device events.
 TF_CONST_INIT extern const absl::string_view kCustomGpuOnDeviceTracePlanePrefix;
+// Name of XStat that contains profile options.
+TF_CONST_INIT extern const absl::string_view kProfileOptionsName;
 
 // Names of XLines that contain ML-level events.
 TF_CONST_INIT extern const absl::string_view kStepLineName;
