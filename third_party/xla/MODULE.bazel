@@ -74,6 +74,7 @@ archive_override(
     module_name = "googletest",
     patch_strip = 1,
     patches = [
+        "//third_party/googletest:googletest.patch",
         "//third_party/googletest:0001-Add-ASSERT_OK-EXPECT_OK-ASSERT_OK_AND_ASSIGN-macros.patch",
     ],
     strip_prefix = "googletest-28e9d1f26771c6517c3b4be10254887673c94018",
