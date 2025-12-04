@@ -301,7 +301,23 @@ NB_MODULE(_profiler, m) {
           })
       .def_prop_rw("session_id", &tensorflow::ProfileOptions::session_id,
                    [](tensorflow::ProfileOptions* options,
-                      const std::string& id) { options->set_session_id(id); });
+                      const std::string& id) { options->set_session_id(id); })
+      .def_prop_rw(
+          "jax_version",
+          [](const tensorflow::ProfileOptions& options) {
+            return options.jax_version();
+          },
+          [](tensorflow::ProfileOptions* options, const std::string& version) {
+            options->set_jax_version(version);
+          })
+      .def_prop_rw(
+          "jaxlib_version",
+          [](const tensorflow::ProfileOptions& options) {
+            return options.jaxlib_version();
+          },
+          [](tensorflow::ProfileOptions* options, const std::string& version) {
+            options->set_jaxlib_version(version);
+          });
 
   nb::class_<TraceMeWrapper> traceme_class(m, "TraceMe");
   traceme_class.def(nb::init<nb::str, nb::kwargs>())
