@@ -86,8 +86,9 @@ class NamedShardingEqualityTest : public ::testing::Test {
 };
 
 TEST_F(NamedShardingEqualityTest, BaseEquality) {
-  EXPECT_EQ(base_,
-            NamedSharding(mesh_abcde_, {ds_ab_, ds_dc_}, {axis_b_}, {axis_c_}));
+  EXPECT_EQ(base_, test_utils::FromAxisNames(mesh_abcde_,
+                                             {{"a", "b:(2)2"}, {"d:(4)2", "c"}},
+                                             {"b:(2)2"}, {"c"}));
 }
 
 TEST_F(NamedShardingEqualityTest, EqualEvenWithDifferentMeshAxisNames) {
@@ -170,11 +171,13 @@ TEST(NamedShardingTest, ToString) {
   NamedSharding sharding_fully_replicated(mesh);
   EXPECT_EQ(sharding_fully_replicated.ToString(), "{replicated}");
 
-  NamedSharding sharding_replicated(mesh, {}, {axis_c});
+  NamedSharding sharding_replicated =
+      test_utils::FromAxisNames(mesh, {}, {"c"});
   EXPECT_EQ(sharding_replicated.ToString(),
             "{@mesh<a=2,b=4,c=3,d=8>, [], replicated={c}}");
 
-  NamedSharding sharding_unreduced(mesh, {}, {}, {axis_d});
+  NamedSharding sharding_unreduced =
+      test_utils::FromAxisNames(mesh, {}, {}, {"d:(4)2"});
   EXPECT_EQ(sharding_unreduced.ToString(),
             "{@mesh<a=2,b=4,c=3,d=8>, [], unreduced={d:(4)2}}");
 
@@ -186,7 +189,8 @@ TEST(NamedShardingTest, ToString) {
       TileAssignment(/*dims=*/{2, 4, 4, 2}, /*reshape_dims=*/{1, 4, 1, 16},
                      /*transpose_perm=*/{2, 3, 0, 1}),
       {"a", "b", "c", "d"});
-  NamedSharding sharding_non_iota(non_iota_mesh, {ds_a});
+  NamedSharding sharding_non_iota =
+      test_utils::FromAxisNames(non_iota_mesh, {{"a"}});
   EXPECT_EQ(sharding_non_iota.ToString(),
             "{@mesh<a=2,b=4,c=4,d=2>, device_ids=([4,16]T(1,0)), [{a}]}");
 
@@ -194,8 +198,8 @@ TEST(NamedShardingTest, ToString) {
   metadata1.set_op_name("foo");
   OpMetadata metadata2;
   metadata2.set_op_name("bar");
-  NamedSharding sharding_all(mesh, {ds_a}, {axis_c}, {axis_d}, {axis_b},
-                             {metadata1, metadata2});
+  NamedSharding sharding_all = test_utils::FromAxisNames(
+      mesh, {{"a"}}, {"c"}, {"d:(4)2"}, {"b:(2)2"}, {metadata1, metadata2});
   EXPECT_EQ(sharding_all.ToString(),
             "{@mesh<a=2,b=4,c=3,d=8>, [{a}], replicated={c}, "
             "unreduced={d:(4)2}, manual={b:(2)2}}");
