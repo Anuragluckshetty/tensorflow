@@ -25,17 +25,20 @@ limitations under the License.
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "xla/array2d.h"
-#include "xla/client/local_client.h"
 #include "xla/hlo/builder/xla_builder.h"
 #include "xla/hlo/builder/xla_computation.h"
 #include "xla/hlo/testlib/test_helpers.h"
+#include "xla/layout_util.h"
 #include "xla/literal.h"
+#include "xla/literal_util.h"
 #include "xla/reference_util.h"
 #include "xla/shape_util.h"
-#include "xla/stream_executor/device_description.h"
-#include "xla/tests/client_library_test_base.h"
+#include "xla/tests/client_library_test_runner_mixin.h"
+#include "xla/tests/hlo_pjrt_interpreter_reference_mixin.h"
+#include "xla/tests/hlo_pjrt_test_base.h"
 #include "xla/tests/literal_test_util.h"
 #include "xla/tests/test_utils.h"
+#include "xla/tests/xla_test_backend_predicates.h"
 #include "xla/xla_data.pb.h"
 #include "tsl/platform/statusor.h"
 #include "tsl/platform/test.h"
@@ -45,7 +48,8 @@ namespace {
 
 using TypesF16F32 = ::testing::Types<Eigen::half, float>;
 
-class MatOpsSimpleTest : public ClientLibraryTestBase {};
+using MatOpsSimpleTest = ClientLibraryTestRunnerMixin<
+    HloPjRtInterpreterReferenceMixin<HloPjRtTestBase>>;
 
 template <typename T>
 class MatOpsSimpleTest_F16F32 : public MatOpsSimpleTest {};
@@ -173,27 +177,19 @@ INSTANTIATE_TEST_CASE_P(
     PrintTestLinspaceMaxParam);
 
 class MatOpsDotAddTest
-    : public ClientLibraryTestBase,
+    : public ClientLibraryTestRunnerMixin<
+          HloPjRtInterpreterReferenceMixin<HloPjRtTestBase>>,
       public ::testing::WithParamInterface<std::tuple<bool, bool, bool, bool>> {
  public:
   // Returns true if the test is using a GPU.
-  bool IsGpu() {
-    auto stream_executor = client_->platform()->ExecutorForDevice(0).value();
-    auto gpu_compute_capability =
-        stream_executor->GetDeviceDescription().gpu_compute_capability();
-    if (gpu_compute_capability.IsCuda() || gpu_compute_capability.IsRocm()) {
-      return true;
-    }
-    return false;
-  }
+  bool IsGpu() { return xla::test::DeviceTypeIs(xla::test::kGpu); }
   template <typename T>
   void TestImpl() {
     bool row_major = std::get<0>(GetParam());
     bool add_lhs = std::get<1>(GetParam());
     bool transpose = std::get<2>(GetParam());
     bool use_cublaslt = IsGpu() ? std::get<3>(GetParam()) : false;
-    execution_options_.mutable_debug_options()->set_xla_gpu_enable_cublaslt(
-        use_cublaslt);
+    mutable_debug_options()->set_xla_gpu_enable_cublaslt(use_cublaslt);
     Array2D<T> lhs({{1.0f, 2.0f}, {3.0f, 4.0f}});
     Array2D<T> rhs({{10.0f, 11.0f}, {12.0f, 13.0f}});
 
@@ -207,14 +203,10 @@ class MatOpsDotAddTest
     Shape rhs_shape =
         ShapeUtil::MakeShape(prim_type, {rhs.height(), rhs.width()});
 
-    TF_ASSERT_OK_AND_ASSIGN(
-        auto lhs_handle,
-        client_->TransferToServer(LiteralUtil::CreateR2FromArray2DWithLayout<T>(
-            lhs, LayoutUtil::MakeLayout(minor_to_major(row_major)))));
-    TF_ASSERT_OK_AND_ASSIGN(
-        auto rhs_handle,
-        client_->TransferToServer(LiteralUtil::CreateR2FromArray2DWithLayout<T>(
-            rhs, LayoutUtil::MakeLayout(minor_to_major(row_major)))));
+    Literal lhs_literal = LiteralUtil::CreateR2FromArray2DWithLayout<T>(
+        lhs, LayoutUtil::MakeLayout(minor_to_major(row_major)));
+    Literal rhs_literal = LiteralUtil::CreateR2FromArray2DWithLayout<T>(
+        rhs, LayoutUtil::MakeLayout(minor_to_major(row_major)));
 
     XlaBuilder builder(TestName());
     auto lhs_arg = Parameter(&builder, 0, lhs_shape, "lhs");
@@ -241,8 +233,7 @@ class MatOpsDotAddTest
       }
     }
 
-    ComputeAndCompareR2<T>(&builder, expected,
-                           {lhs_handle.get(), rhs_handle.get()},
+    ComputeAndCompareR2<T>(&builder, expected, {&lhs_literal, &rhs_literal},
                            ErrorSpec(1e-6));
   }
 
@@ -288,8 +279,7 @@ class MatOpsDotAddTest
     bool row_major = std::get<0>(GetParam());
     bool transpose = std::get<2>(GetParam());
     bool use_cublaslt = IsGpu() ? std::get<3>(GetParam()) : false;
-    execution_options_.mutable_debug_options()->set_xla_gpu_enable_cublaslt(
-        use_cublaslt);
+    mutable_debug_options()->set_xla_gpu_enable_cublaslt(use_cublaslt);
     Array2D<T> lhs({{1.0f, 2.0f}, {3.0f, 4.0f}});
     Array2D<T> rhs({{10.0f, 11.0f}, {12.0f, 13.0f}});
     auto minor_to_major = [](bool row_major) -> std::vector<int64_t> {
@@ -299,22 +289,16 @@ class MatOpsDotAddTest
     XlaBuilder builder(TestName());
     auto result = generate_dot_add(builder, lhs, rhs, transpose, 2);
     (void)result;
-    TF_ASSERT_OK_AND_ASSIGN(
-        auto lhs_handle,
-        client_->TransferToServer(LiteralUtil::CreateR2FromArray2DWithLayout<T>(
-            lhs, LayoutUtil::MakeLayout(minor_to_major(row_major)))));
-    TF_ASSERT_OK_AND_ASSIGN(
-        auto rhs_handle,
-        client_->TransferToServer(LiteralUtil::CreateR2FromArray2DWithLayout<T>(
-            rhs, LayoutUtil::MakeLayout(minor_to_major(row_major)))));
+    Literal lhs_literal = LiteralUtil::CreateR2FromArray2DWithLayout<T>(
+        lhs, LayoutUtil::MakeLayout(minor_to_major(row_major)));
+    Literal rhs_literal = LiteralUtil::CreateR2FromArray2DWithLayout<T>(
+        rhs, LayoutUtil::MakeLayout(minor_to_major(row_major)));
 
     auto prim_type = primitive_util::NativeToPrimitiveType<T>();
     Shape bias_shape = ShapeUtil::MakeShape(prim_type, {2});
     std::vector<T> bias_elems(ShapeUtil::ElementsIn(bias_shape));
     iota_int_init_value(bias_elems, 1);
     auto bias_literal = LiteralUtil::CreateR1<T>(bias_elems);
-    TF_ASSERT_OK_AND_ASSIGN(auto bias_handle,
-                            client_->TransferToServer(bias_literal));
     Array2D<T> expected;
 
     if (transpose) {
@@ -323,10 +307,9 @@ class MatOpsDotAddTest
       expected = Array2D<T>({{35.0f, 39.0f}, {79.0f, 87.0f}});
     }
 
-    ComputeAndCompareR2<T>(
-        &builder, expected,
-        {lhs_handle.get(), rhs_handle.get(), bias_handle.get()},
-        ErrorSpec(1e-6));
+    ComputeAndCompareR2<T>(&builder, expected,
+                           {&lhs_literal, &rhs_literal, &bias_literal},
+                           ErrorSpec(1e-6));
   }
 
   template <typename T>
@@ -334,8 +317,7 @@ class MatOpsDotAddTest
     bool row_major = std::get<0>(GetParam());
     bool transpose = std::get<2>(GetParam());
     bool use_cublaslt = IsGpu() ? std::get<3>(GetParam()) : false;
-    execution_options_.mutable_debug_options()->set_xla_gpu_enable_cublaslt(
-        use_cublaslt);
+    mutable_debug_options()->set_xla_gpu_enable_cublaslt(use_cublaslt);
     Array2D<T> lhs({{-1.0f, 2.0f}, {3.0f, 4.0f}});
     Array2D<T> rhs({{10.0f, 11.0f}, {-12.0f, 13.0f}});
     auto minor_to_major = [](bool row_major) -> std::vector<int64_t> {
@@ -348,14 +330,10 @@ class MatOpsDotAddTest
     auto constant_zero_bcast = BroadcastInDim(constant_zero, {2, 2}, {});
     result = Max(result, constant_zero_bcast);
 
-    TF_ASSERT_OK_AND_ASSIGN(
-        auto lhs_handle,
-        client_->TransferToServer(LiteralUtil::CreateR2FromArray2DWithLayout<T>(
-            lhs, LayoutUtil::MakeLayout(minor_to_major(row_major)))));
-    TF_ASSERT_OK_AND_ASSIGN(
-        auto rhs_handle,
-        client_->TransferToServer(LiteralUtil::CreateR2FromArray2DWithLayout<T>(
-            rhs, LayoutUtil::MakeLayout(minor_to_major(row_major)))));
+    Literal lhs_literal = LiteralUtil::CreateR2FromArray2DWithLayout<T>(
+        lhs, LayoutUtil::MakeLayout(minor_to_major(row_major)));
+    Literal rhs_literal = LiteralUtil::CreateR2FromArray2DWithLayout<T>(
+        rhs, LayoutUtil::MakeLayout(minor_to_major(row_major)));
 
     Array2D<T> expected;
 
@@ -365,8 +343,7 @@ class MatOpsDotAddTest
       expected = Array2D<T>({{0.0f, 15.0f}, {0.0f, 85.0f}});
     }
 
-    ComputeAndCompareR2<T>(&builder, expected,
-                           {lhs_handle.get(), rhs_handle.get()},
+    ComputeAndCompareR2<T>(&builder, expected, {&lhs_literal, &rhs_literal},
                            ErrorSpec(1e-6));
   }
 
@@ -375,8 +352,7 @@ class MatOpsDotAddTest
     bool row_major = std::get<0>(GetParam());
     bool transpose = std::get<2>(GetParam());
     bool use_cublaslt = IsGpu() ? std::get<3>(GetParam()) : false;
-    execution_options_.mutable_debug_options()->set_xla_gpu_enable_cublaslt(
-        use_cublaslt);
+    mutable_debug_options()->set_xla_gpu_enable_cublaslt(use_cublaslt);
     Array2D<T> lhs({{-1.0f, 2.0f}, {3.0f, 4.0f}});
     Array2D<T> rhs({{10.0f, 11.0f}, {-12.0f, 13.0f}});
     auto minor_to_major = [](bool row_major) -> std::vector<int64_t> {
@@ -389,22 +365,16 @@ class MatOpsDotAddTest
     auto constant_bcast = BroadcastInDim(constant, {2, 2}, {});
     result = Max(result, constant_bcast);
 
-    TF_ASSERT_OK_AND_ASSIGN(
-        auto lhs_handle,
-        client_->TransferToServer(LiteralUtil::CreateR2FromArray2DWithLayout<T>(
-            lhs, LayoutUtil::MakeLayout(minor_to_major(row_major)))));
-    TF_ASSERT_OK_AND_ASSIGN(
-        auto rhs_handle,
-        client_->TransferToServer(LiteralUtil::CreateR2FromArray2DWithLayout<T>(
-            rhs, LayoutUtil::MakeLayout(minor_to_major(row_major)))));
+    Literal lhs_literal = LiteralUtil::CreateR2FromArray2DWithLayout<T>(
+        lhs, LayoutUtil::MakeLayout(minor_to_major(row_major)));
+    Literal rhs_literal = LiteralUtil::CreateR2FromArray2DWithLayout<T>(
+        rhs, LayoutUtil::MakeLayout(minor_to_major(row_major)));
 
     auto prim_type = primitive_util::NativeToPrimitiveType<T>();
     Shape bias_shape = ShapeUtil::MakeShape(prim_type, {2});
     std::vector<T> bias_elems(ShapeUtil::ElementsIn(bias_shape));
     iota_int_init_value(bias_elems, 1);
     auto bias_literal = LiteralUtil::CreateR1<T>(bias_elems);
-    TF_ASSERT_OK_AND_ASSIGN(auto bias_handle,
-                            client_->TransferToServer(bias_literal));
     Array2D<T> expected;
 
     if (transpose) {
@@ -413,10 +383,9 @@ class MatOpsDotAddTest
       expected = Array2D<T>({{0.0f, 17.0f}, {0.0f, 87.0f}});
     }
 
-    ComputeAndCompareR2<T>(
-        &builder, expected,
-        {lhs_handle.get(), rhs_handle.get(), bias_handle.get()},
-        ErrorSpec(1e-6));
+    ComputeAndCompareR2<T>(&builder, expected,
+                           {&lhs_literal, &rhs_literal, &bias_literal},
+                           ErrorSpec(1e-6));
   }
 };
 
