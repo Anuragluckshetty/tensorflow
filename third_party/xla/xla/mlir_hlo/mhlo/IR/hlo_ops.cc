@@ -4489,6 +4489,82 @@ LogicalResult ScanOp::reifyReturnTypeShapes(
   return success();
 }
 
+LogicalResult ScanOp::verify() {
+  if (getInits().size() != getCarries().size()) {
+    return emitOpError() << "requires the number of inits ("
+                         << getInits().size() << ") and carries ("
+                         << getCarries().size() << ") to be equal";
+  }
+  return success();
+}
+
+ParseResult ScanOp::parse(OpAsmParser& parser, OperationState& result) {
+  SmallVector<OpAsmParser::UnresolvedOperand, 4> inputs, inits;
+  int64_t dimension;
+  Region* body = result.addRegion();
+  FunctionType funcType;
+
+  if (parser.parseOperandList(inputs, OpAsmParser::Delimiter::Paren) ||
+      parser.parseKeyword("inits") ||
+      parser.parseOperandList(inits, OpAsmParser::Delimiter::Paren) ||
+      parser.parseKeyword("dimension") || parser.parseEqual() ||
+      parser.parseInteger(dimension) || parser.parseRegion(*body) ||
+      parser.parseOptionalAttrDict(result.attributes) ||
+      parser.parseColonType(funcType)) {
+    return failure();
+  }
+
+  size_t numInputs = inputs.size();
+  size_t numCarries = inits.size();
+  if (funcType.getInputs().size() != numInputs + numCarries) {
+    return parser.emitError(
+        parser.getNameLoc(),
+        "operand types must match the number of inputs and inits");
+  }
+  if (funcType.getResults().size() < numCarries) {
+    return parser.emitError(
+        parser.getNameLoc(),
+        "not enough result types to cover the required carries");
+  }
+
+  auto inputTypes = funcType.getInputs().take_front(numInputs);
+  auto initTypes = funcType.getInputs().take_back(numCarries);
+  if (parser.resolveOperands(inputs, inputTypes, parser.getNameLoc(),
+                             result.operands) ||
+      parser.resolveOperands(inits, initTypes, parser.getNameLoc(),
+                             result.operands)) {
+    return failure();
+  }
+  result.addTypes(funcType.getResults());
+
+  Builder& builder = parser.getBuilder();
+  result.addAttribute(ScanOp::getDimensionAttrName(result.name),
+                      builder.getI64IntegerAttr(dimension));
+  result.addAttribute(
+      ScanOp::getOperandSegmentSizeAttr(),
+      builder.getDenseI32ArrayAttr({(int32_t)numInputs, (int32_t)numCarries}));
+  size_t numOutputs = funcType.getNumResults() - numCarries;
+  result.addAttribute(
+      ScanOp::getResultSegmentSizeAttr(),
+      builder.getDenseI32ArrayAttr({(int32_t)numOutputs, (int32_t)numCarries}));
+
+  return success();
+}
+
+void ScanOp::print(OpAsmPrinter& p) {
+  p << "(";
+  p.printOperands(getInputs());
+  p << ") inits (";
+  p.printOperands(getInits());
+  p << ") dimension=" << getDimension() << " ";
+  p.printRegion(getBody(), /*printEntryBlockArgs=*/true);
+  p.printOptionalAttrDict(getOperation()->getAttrs(),
+                          /*elidedAttrs=*/{"dimension", "operandSegmentSizes",
+                                           "resultSegmentSizes"});
+  p << " : ";
+  p.printFunctionalType(*this);
+}
+
 //===----------------------------------------------------------------------===//
 // SelectOp
 //===----------------------------------------------------------------------===//

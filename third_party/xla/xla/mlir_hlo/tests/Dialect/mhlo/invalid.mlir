@@ -197,3 +197,55 @@ func.func @reduce_precision_no_m_num(%arg0: tensor<3x4xf32>) -> (tensor<3x4xf32>
   %0 = mhlo.reduce_precision %arg0, format = e2m : tensor<3x4xf32>
   func.return %0 : tensor<?x?xf64>
 }
+
+// -----
+
+func.func @scan_body_returns_too_few_results(%input: tensor<10xf32>, %init: tensor<f32>) -> tensor<10xf32> {
+  // expected-error @+2 {{'mhlo.scan' op failed to infer returned types}}
+  // expected-error @+1 {{ScanOp body must return at least 1 values (carries)}}
+  %0:2 = mhlo.scan (%input) inits (%init) dimension=0 {
+  ^bb0(%carry0: tensor<f32>, %input0: tensor<f32>):
+    %1 = mhlo.add %carry0, %input0 : tensor<f32>
+    "mhlo.return"() : () -> ()
+  } : (tensor<10xf32>, tensor<f32>) -> (tensor<10xf32>, tensor<f32>)
+  func.return %0#0 : tensor<10xf32>
+}
+
+// -----
+
+func.func @scan_no_input_but_output(%init: tensor<f32>) -> tensor<10xf32> {
+  // expected-error @+2 {{'mhlo.scan' op failed to infer returned types}}
+  // expected-error @+1 {{ScanOp must have at least one input if it produces outputs}}
+  %0:2 = mhlo.scan () inits (%init) dimension=0 {
+  ^bb0(%carry0: tensor<f32>):
+    %1 = mhlo.add %carry0, %carry0 : tensor<f32>
+    "mhlo.return"(%1, %1) : (tensor<f32>, tensor<f32>) -> ()
+  } : (tensor<f32>) -> (tensor<10xf32>, tensor<f32>)
+  func.return %0#0 : tensor<10xf32>
+}
+
+// -----
+
+func.func @scan_dim_out_of_bounds(%input: tensor<10xf32>, %init: tensor<f32>) -> tensor<10xf32> {
+  // expected-error @+2 {{'mhlo.scan' op failed to infer returned types}}
+  // expected-error @+1 {{Scan dimension out of bounds}}
+  %0:2 = mhlo.scan (%input) inits (%init) dimension=1 {
+  ^bb0(%carry0: tensor<f32>, %input0: tensor<f32>):
+    %1 = mhlo.add %carry0, %input0 : tensor<f32>
+    mhlo.return %1, %1 : tensor<f32>, tensor<f32>
+  } : (tensor<10xf32>, tensor<f32>) -> (tensor<10xf32>, tensor<f32>)
+  func.return %0#0 : tensor<10xf32>
+}
+
+// -----
+
+func.func @scan_dim_out_of_bounds_output(%input: tensor<10x10xf32>, %init: tensor<f32>) -> tensor<10x10xf32> {
+  // expected-error @+2 {{'mhlo.scan' op failed to infer returned types}}
+  // expected-error @+1 {{Scan dimension out of bounds for output}}
+  %0:2 = mhlo.scan (%input) inits (%init) dimension=1 {
+  ^bb0(%carry0: tensor<f32>, %input0: tensor<10xf32>):
+    %1 = mhlo.add %carry0, %carry0 : tensor<f32>
+    mhlo.return %1, %1 : tensor<f32>, tensor<f32>
+  } : (tensor<10x10xf32>, tensor<f32>) -> (tensor<10x10xf32>, tensor<f32>)
+  func.return %0#0 : tensor<10x10xf32>
+}

@@ -1888,10 +1888,11 @@ def MHLO_ReduceOp: MHLO_ShapedInterfaceOp<"reduce", [
 }
 
 def MHLO_ScanOp: MHLO_ShapedInterfaceOp<"scan", [
-      RecursiveMemoryEffects,
-      SingleBlockImplicitTerminator<"ReturnOp">,
-      InferTensorType,
-      AttrSizedOperandSegments
+      AttrSizedOperandSegments,
+      AttrSizedResultSegments,
+      InferTensorTypeWithReify,
+      OpAsmOpInterface,
+      RecursiveMemoryEffects
     ]> {
   let summary = "Scan operation";
   let description = [{
@@ -1909,14 +1910,26 @@ def MHLO_ScanOp: MHLO_ShapedInterfaceOp<"scan", [
     Variadic<MHLO_Tensor>:$inits,
     ConfinedAttr<I64Attr, [IntNonNegative]>:$dimension,
     DefaultValuedOptionalAttr<BoolAttr, "false">:$is_reverse,
-    DefaultValuedOptionalAttr<MHLO_AssociativityAttr, "::mlir::mhlo::Associativity::MAYBE">:$is_associative
+    OptionalAttr<BoolAttr>:$is_associative
   );
 
-  let results = (outs Variadic<MHLO_Tensor>:$results);
+  let results = (outs
+    Variadic<MHLO_Tensor>:$outputs,
+    Variadic<MHLO_Tensor>:$carries
+  );
 
   let regions = (region SizedRegion<1>:$body);
 
-  let hasCustomHLOConverter = 1;
+  let extraClassDeclaration = [{
+    void getAsmBlockArgumentNames(Region &region, OpAsmSetValueNameFn setNameFn) {
+      for (size_t i = 0; i < region.getNumArguments(); ++i) {
+        setNameFn(region.getArgument(i), i < getInputs().size() ? "input" : "carry");
+      }
+    }
+  }];
+
+  let hasCustomAssemblyFormat = 1;
+  let hasVerifier = 1;
 }
 
 //===----------------------------------------------------------------------===//
