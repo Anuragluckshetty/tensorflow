@@ -284,5 +284,62 @@ ENTRY main {
   }
 }
 
+TEST_F(TestUtilsTest, MakeFakeArgumentsForFusionWithDynamicSlice) {
+  auto module = ParseAndReturnVerifiedModule(R"(
+HloModule fusion.14451
+
+%copy_fusion.605.clone (input.626: bf16[64,128,512,1]) -> bf16[64,128,512,1] {
+  %input.626 = bf16[64,128,512,1]{2,1,0,3} parameter(0)
+  ROOT %copy.55330 = bf16[64,128,512,1]{2,1,0,3} copy(%input.626)
+}
+
+%fused_computation.145.clone.clone.clone (param_0.99237: u32[], param_1.115419: bf16[64,128,512,1], param_2.79387: u32[], param_3.55185: u32[], param_4.37665: u32[]) -> (bf16[4,128,512,2], bf16[4,128,512,2]) {
+  %param_1.115419 = bf16[64,128,512,1]{2,1,0,3} parameter(1)
+  %fusion.16278 = bf16[64,128,512,1]{2,1,0,3} fusion(%param_1.115419), kind=kLoop, calls=%copy_fusion.605.clone
+  %constant.93695 = f32[] constant(-inf)
+  %pad.8833 = bf16[64,128,512,2]{2,1,0,3} pad(%fusion.16278, %constant.93695), padding=0_0x0_0x0_0x0_1
+  %param_0.99237 = u32[] parameter(0)
+  %zero.83 = u32[] constant(0)
+  %dynamic-slice.10062 = bf16[4,128,512,2]{2,1,0,3} dynamic-slice(%pad.8833, %param_0.99237, %zero.83, %zero.83, %zero.83), dynamic_slice_sizes={4,128,512,2}
+  %pad.8834 = bf16[64,128,512,2]{2,1,0,3} pad(%fusion.16278, %constant.93695), padding=0_0x0_0x0_0x1_0
+  %param_2.79387 = u32[] parameter(2)
+  %dynamic-slice.10063 = bf16[4,128,512,2]{2,1,0,3} dynamic-slice(%pad.8834, %param_2.79387, %zero.83, %zero.83, %zero.83), dynamic_slice_sizes={4,128,512,2}
+  %maximum.1334 = bf16[4,128,512,2]{2,1,0,3} maximum(%dynamic-slice.10062, %dynamic-slice.10063)
+  %copy.55331 = bf16[4,128,512,2]{2,1,0,3} copy(%maximum.1334)
+  %param_4.37665 = u32[] parameter(4)
+  %dynamic-slice.7328.clone.3 = bf16[4,128,512,2]{2,1,0,3} dynamic-slice(%pad.8833, %param_4.37665, %zero.83, %zero.83, %zero.83), dynamic_slice_sizes={4,128,512,2}
+  %param_3.55185 = u32[] parameter(3)
+  %dynamic-slice.7332.clone.3 = bf16[4,128,512,2]{2,1,0,3} dynamic-slice(%pad.8834, %param_3.55185, %zero.83, %zero.83, %zero.83), dynamic_slice_sizes={4,128,512,2}
+  %maximum.415.clone.3 = bf16[4,128,512,2]{2,1,0,3} maximum(%dynamic-slice.7328.clone.3, %dynamic-slice.7332.clone.3)
+  %copy.55332 = bf16[4,128,512,2]{2,1,0,3} copy(%maximum.415.clone.3)
+  ROOT %tuple.22033 = (bf16[4,128,512,2]{2,1,0,3}, bf16[4,128,512,2]{2,1,0,3}) tuple(%copy.55331, %copy.55332)
+}
+
+ENTRY %fusion.14451 (parameter.0: u32[], parameter.1: bf16[64,128,512,1], parameter.2: u32[], parameter.3: u32[], parameter.4: u32[]) -> (bf16[4,128,512,2], bf16[4,128,512,2]) {
+  %parameter.0 = u32[] parameter(0)
+  %parameter.1 = bf16[64,128,512,1]{2,1,0,3} parameter(1)
+  %parameter.2 = u32[] parameter(2)
+  %parameter.3 = u32[] parameter(3)
+  %parameter.4 = u32[] parameter(4)
+  ROOT %fusion.14451 = (bf16[4,128,512,2]{2,1,0,3}, bf16[4,128,512,2]{2,1,0,3}) fusion(%parameter.0, %parameter.1, %parameter.2, %parameter.3, %parameter.4), kind=kLoop, calls=%fused_computation.145.clone.clone.clone
+}
+)")
+                    .value();
+
+  TF_ASSERT_OK_AND_ASSIGN(std::vector<Literal> args,
+                          MakeFakeArguments(module.get()));
+  ASSERT_EQ(args.size(), 5);
+
+  // args[0], [2], [3], [4] are indices for dim 0.
+  // Input shape dim 0 is 64. Output shape dim 0 is 4.
+  // Index must be <= 64 - 4 = 60.
+  int64_t bound = 60;
+
+  for (int i : {0, 2, 3, 4}) {
+    EXPECT_GE(args[i].Get<uint32_t>({}), 0);
+    EXPECT_LE(args[i].Get<uint32_t>({}), bound);
+  }
+}
+
 }  // namespace
 }  // namespace xla
