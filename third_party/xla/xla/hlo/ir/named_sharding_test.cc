@@ -21,6 +21,8 @@ limitations under the License.
 #include <gtest/gtest.h>
 #include "xla/hlo/ir/mesh_and_axis.h"
 #include "xla/hlo/ir/tile_assignment.h"
+#include "xla/tsl/util/proto/parse_text_proto.h"
+#include "xla/tsl/util/proto/proto_matchers.h"
 #include "xla/xla_data.pb.h"
 
 namespace xla {
@@ -439,6 +441,41 @@ TEST(NamedShardingTest, NumDevices) {
   Mesh empty_mesh;
   NamedSharding empty_sharding(empty_mesh);
   EXPECT_EQ(empty_sharding.num_devices(), 0);
+}
+
+TEST(NamedShardingTest, ManualAxesProtoConversion) {
+  Mesh mesh({2, 4, 3, 5}, {"a", "b", "c", "d"});
+  AxisRef axis_a(0);
+  AxisRef axis_b(1);
+  AxisRef axis_c(2);
+  AxisRef axis_d(3);
+  NamedSharding sharding = test_utils::FromAxisNames(
+      mesh, /*dim_shardings=*/{{"a"}},
+      /*replicated_axes=*/{"b"}, /*unreduced_axes=*/{"d"},
+      /*manual_axes=*/{"c"});
+
+  NamedShardingProto proto = sharding.ToProto();
+  auto expected_proto =
+      ::tsl::proto_testing::ParseTextProtoOrDie<NamedShardingProto>(R"pb(
+        mesh {
+          axes { name: "a" size: 2 }
+          axes { name: "b" size: 4 }
+          axes { name: "c" size: 3 }
+          axes { name: "d" size: 5 }
+        }
+        dim_shardings {
+          axes { mesh_axis_index: 0 }
+          is_closed: true
+        }
+        replicated_axes { mesh_axis_index: 1 }
+        unreduced_axes { mesh_axis_index: 3 }
+        manual_axes { mesh_axis_index: 2 }
+      )pb");
+
+  ASSERT_THAT(proto, ::tsl::proto_testing::EquivToProto(expected_proto));
+
+  NamedSharding from_proto = NamedSharding::FromProto(proto);
+  EXPECT_EQ(sharding, from_proto);
 }
 
 }  // namespace
