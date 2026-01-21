@@ -45,11 +45,27 @@ limitations under the License.
 namespace xla {
 namespace gpu {
 
+// RaggedAllToAll has 4 operands with ragged tensor metadata: input_offsets,
+// send_sizes, output_offsets, and recv_sizes.
+constexpr int64_t kNumRaggedMetadataOperands = 4;
+
 struct RaggedAllToAllConfig {
   CollectiveConfig config;
   int64_t num_total_updates = 1;
   int64_t num_input_rows = 1;
   int64_t num_row_elements = 1;
+};
+
+// Contains the values that are passed between host threads with rendezvous.
+struct RaggedAllToAllRendezvousValue {
+  RankId rank;
+  se::DeviceAddressBase output_buffer;
+  se::Event* start_event = nullptr;
+  se::Event* end_event = nullptr;
+
+  bool operator<(const RaggedAllToAllRendezvousValue& other) const {
+    return rank < other.rank;
+  }
 };
 
 // Thunk that performs a NCCL-based Ragged-All-to-All among CUDA GPU-based
@@ -80,6 +96,11 @@ class RaggedAllToAllStartThunk : public CollectiveThunk {
       const HloRaggedAllToAllInstruction* instr);
 
   const CollectiveConfig& config() const override { return config_.config; }
+
+  const RaggedAllToAllConfig& ragged_all_to_all_config() const {
+    return config_;
+  }
+
   absl::Span<const Buffer> buffers() const { return buffers_; }
 
   static absl::StatusOr<std::unique_ptr<RaggedAllToAllStartThunk>> FromProto(
@@ -108,19 +129,7 @@ class RaggedAllToAllStartThunk : public CollectiveThunk {
                                      Communicator& comm) override;
 
  private:
-  // Contains the values that are passed between host threads with rendezvous.
-  struct RendezvousValue {
-    RankId rank;
-    se::DeviceAddressBase output_buffer;
-    se::Event* start_event = nullptr;
-    se::Event* end_event = nullptr;
-
-    bool operator<(const RendezvousValue& other) const {
-      return rank < other.rank;
-    }
-  };
-
-  struct StreamState {
+  struct RaggedAllToAllStreamState {
     int device_ordinal;
     RankId rank;
 
@@ -139,28 +148,9 @@ class RaggedAllToAllStartThunk : public CollectiveThunk {
     // kernel.
     std::unique_ptr<se::Event> end_event;
 
-    StreamState(int device_ordinal, RankId rank)
+    RaggedAllToAllStreamState(int device_ordinal, RankId rank)
         : device_ordinal(device_ordinal), rank(rank) {}
   };
-
-  // Executes the rendezvous before the kernel start.
-  // Inserts CUDA events into the stream to ensure that all devices have reached
-  // the start event before the kernel starts.
-  absl::StatusOr<std::shared_ptr<std::vector<RendezvousValue>>>
-  RendezvousBeforeKernelStart(const GpuCliqueKey& clique_key,
-                              se::Stream& stream, const StreamState& state,
-                              const se::DeviceAddressBase& output_buffer);
-
-  // Executes the rendezvous after the kernel finish. Waits for all devices to
-  // reach the end event.
-  absl::Status RendezvousAfterKernelFinish(
-      const GpuCliqueKey& clique_key, se::Stream& stream,
-      const StreamState& state,
-      const std::vector<RendezvousValue>& rendezvous_values);
-
-  absl::Status RunOneShotRaggedAllToAll(
-      const GpuCliqueKey& clique_key, se::Stream& stream,
-      const StreamState& state, absl::Span<DeviceBufferPair const> buffers);
 
   bool is_local() const;
 
@@ -169,10 +159,24 @@ class RaggedAllToAllStartThunk : public CollectiveThunk {
   int64_t device_count_ = -1;
   const bool one_shot_kernel_enabled_;
 
-  absl::Mutex mutex_;
-  absl::flat_hash_map<se::StreamExecutor*, std::unique_ptr<StreamState>>
+  mutable absl::Mutex mutex_;
+  absl::flat_hash_map<se::StreamExecutor*,
+                      std::unique_ptr<RaggedAllToAllStreamState>>
       per_stream_states_ ABSL_GUARDED_BY(mutex_);
 };
+
+absl::Status RunRaggedAllToAll(
+    int64_t ragged_row_element_size, int64_t num_total_updates,
+    const std::vector<DeviceBufferPair>& original_buffers, se::Stream& stream,
+    Communicator& comm, absl::Span<int64_t* const> ragged_metadata_allocs,
+    const se::DeviceAddressBase& output_offsets_device_buffer,
+    bool use_symmetric_buffer);
+
+absl::Status RunOneShotRaggedAllToAll(
+    const GpuCliqueKey& clique_key, se::Stream& stream, RankId rank,
+    se::Event* start_event, se::Event* end_event, int64_t num_total_updates,
+    int64_t num_input_rows, int64_t num_row_elements,
+    absl::Span<DeviceBufferPair const> buffers);
 
 }  // namespace gpu
 }  // namespace xla
